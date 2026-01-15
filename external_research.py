@@ -1,20 +1,14 @@
-import streamlit as st
 from groq import Groq
+import os
 
-def external_research_answer(query):
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-
-    response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
+def external_research_answer(prompt):
+    completion = client.chat.completions.create(
+        model="llama-3.1-70b-versatile",
         messages=[
-            {"role": "system", "content": "You are a hospital-grade medical research AI. Provide evidence-based medical information."},
-            {"role": "user", "content": query}
-        ],
-        temperature=0.3,
-        max_tokens=800
+            {"role": "system", "content": "You are a hospital-grade medical research AI."},
+            {"role": "user", "content": prompt}
+        ]
     )
-
-    return {
-        "answer": response.choices[0].message.content
-    }
+    return {"answer": completion.choices[0].message.content}
