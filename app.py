@@ -1,14 +1,14 @@
 # ======================================================
 # ĀROGYABODHA AI — Hospital Clinical Intelligence Platform
-# ENTERPRISE FINAL BUILD with Universal AI Mode Selector
+# ENTERPRISE FINAL BUILD (Production Safe)
 # ======================================================
 
 import streamlit as st
-import os, json, pickle, datetime, io, hashlib
+import os, json, pickle, datetime, io
 import numpy as np
 import faiss
 import pandas as pd
-from typing import Dict, Any, List
+from typing import List
 from sentence_transformers import SentenceTransformer
 from pypdf import PdfReader
 from external_research import external_research_answer
@@ -37,21 +37,13 @@ st.info(
 BASE_DIR = os.getcwd()
 PDF_FOLDER = os.path.join(BASE_DIR, "medical_library")
 VECTOR_FOLDER = os.path.join(BASE_DIR, "vector_cache")
-LAB_FOLDER = os.path.join(BASE_DIR, "lab_reports")
-RAD_FOLDER = os.path.join(BASE_DIR, "radiology")
-FHIR_FOLDER = os.path.join(BASE_DIR, "fhir")
-HL7_FOLDER = os.path.join(BASE_DIR, "hl7")
-HIS_FOLDER = os.path.join(BASE_DIR, "his")
-PACS_FOLDER = os.path.join(BASE_DIR, "pacs")
-SIGNOFF_FOLDER = os.path.join(BASE_DIR, "signoffs")
 
 INDEX_FILE = os.path.join(VECTOR_FOLDER, "index.faiss")
 CACHE_FILE = os.path.join(VECTOR_FOLDER, "cache.pkl")
 USERS_DB = os.path.join(BASE_DIR, "users.json")
 AUDIT_LOG = os.path.join(BASE_DIR, "audit_log.json")
 
-for p in [PDF_FOLDER, VECTOR_FOLDER, LAB_FOLDER, RAD_FOLDER, FHIR_FOLDER,
-          HL7_FOLDER, HIS_FOLDER, PACS_FOLDER, SIGNOFF_FOLDER]:
+for p in [PDF_FOLDER, VECTOR_FOLDER]:
     os.makedirs(p, exist_ok=True)
 
 # ======================================================
@@ -113,7 +105,7 @@ def safe_ai_call(prompt):
         return {"status": "down", "answer": "⚠ AI service unavailable. Governance block applied.", "confidence": 0.0}
 
 # ======================================================
-# AI MODE SELECTOR (UNIVERSAL)
+# AI MODE SELECTOR
 # ======================================================
 def select_ai_mode():
     return st.radio(
@@ -157,7 +149,7 @@ def load_embedder():
 embedder = load_embedder()
 
 # ======================================================
-# FAISS INDEX
+# FAISS INDEX ENGINE
 # ======================================================
 def extract_text_from_pdf_bytes(file_bytes: bytes) -> List[str]:
     reader = PdfReader(io.BytesIO(file_bytes))
@@ -183,12 +175,18 @@ def build_index():
     pickle.dump({"documents": docs, "sources": srcs}, open(CACHE_FILE, "wb"))
     return idx, docs, srcs
 
-if os.path.exists(INDEX_FILE) and not st.session_state.index_ready:
-    st.session_state.index = faiss.read_index(INDEX_FILE)
-    data = pickle.load(open(CACHE_FILE, "rb"))
-    st.session_state.documents = data["documents"]
-    st.session_state.sources = data["sources"]
-    st.session_state.index_ready = True
+# ======================================================
+# ENTERPRISE SAFE INDEX LOADER (SELF HEALING)
+# ======================================================
+def ensure_index_loaded():
+    if st.session_state.index is None and os.path.exists(INDEX_FILE):
+        st.session_state.index = faiss.read_index(INDEX_FILE)
+        data = pickle.load(open(CACHE_FILE, "rb"))
+        st.session_state.documents = data["documents"]
+        st.session_state.sources = data["sources"]
+        st.session_state.index_ready = True
+
+ensure_index_loaded()
 
 # ======================================================
 # SIDEBAR
@@ -214,19 +212,16 @@ if st.sidebar.button("🔄 Build Evidence Index"):
     audit("build_index", {"count": len(st.session_state.documents)})
     st.sidebar.success("Evidence Index Built")
 
-st.sidebar.markdown("🟢 Index Status: READY" if st.session_state.index_ready else "🔴 Index Status: NOT BUILT")
+if st.session_state.index is not None:
+    st.sidebar.markdown("🟢 Index Status: READY")
+else:
+    st.sidebar.markdown("🔴 Index Status: NOT LOADED")
 
 module = st.sidebar.radio("Hospital Command Center", [
     "🔬 Clinical Research Copilot",
     "🏥 ICU Intelligence",
-    "🧪 Lab Intelligence",
     "💊 Drug Interaction AI",
     "🩻 Radiology AI",
-    "📡 HL7 / FHIR Gateway",
-    "🏥 HIS Integration",
-    "🩻 PACS Integration",
-    "🧾 Doctor Sign-off",
-    "📊 NABH Compliance",
     "🕒 Audit Trail"
 ])
 
@@ -240,26 +235,24 @@ if module == "🔬 Clinical Research Copilot":
 
     if st.button("Analyze") and query:
 
-        if ai_mode != "🌍 Global AI" and not st.session_state.index_ready:
-            st.error("Hospital Evidence Index not built.")
-            st.stop()
+        if ai_mode != "🌍 Global AI":
+            if st.session_state.index is None:
+                st.error("Hospital Evidence Index not loaded.")
+                st.stop()
+
+            qemb = embedder.encode([query])
+            _, I = st.session_state.index.search(np.array(qemb, dtype=np.float32), 5)
+            context = "\n\n".join([st.session_state.documents[i] for i in I[0]])
 
         if ai_mode == "🏥 Hospital AI":
-            qemb = embedder.encode([query])
-            _, I = st.session_state.index.search(np.array(qemb, dtype=np.float32), 5)
-            context = "\n\n".join([st.session_state.documents[i] for i in I[0]])
             prompt = f"Use only hospital evidence:\n{context}\n\nQ:{query}"
-
         elif ai_mode == "🌍 Global AI":
             prompt = query
-
         else:
-            qemb = embedder.encode([query])
-            _, I = st.session_state.index.search(np.array(qemb, dtype=np.float32), 5)
-            context = "\n\n".join([st.session_state.documents[i] for i in I[0]])
             prompt = f"Hospital Evidence:\n{context}\n\nQuestion:{query}"
 
         resp = safe_ai_call(prompt)
+        st.subheader("📘 Clinical Answer")
         st.write(resp["answer"])
 
 # ======================================================
@@ -288,35 +281,14 @@ if module == "🏥 ICU Intelligence":
         st.write(resp["answer"])
 
 # ======================================================
-# 🧪 LAB INTELLIGENCE
-# ======================================================
-if module == "🧪 Lab Intelligence":
-    st.header("🧪 Lab Intelligence")
-    ai_mode = select_ai_mode()
-
-    file = st.file_uploader("Upload Lab Report")
-
-    if file and st.button("Analyze Lab"):
-        if ai_mode == "🏥 Hospital AI":
-            prompt = "Interpret lab report using hospital lab protocol."
-        elif ai_mode == "🌍 Global AI":
-            prompt = "Interpret lab report using global clinical guidelines."
-        else:
-            prompt = "Interpret lab report using hospital protocol and global guidelines."
-
-        resp = safe_ai_call(prompt)
-        st.write(resp["answer"])
-
-# ======================================================
 # 💊 DRUG INTERACTION AI
 # ======================================================
 if module == "💊 Drug Interaction AI":
     st.header("💊 Drug Interaction AI")
     ai_mode = select_ai_mode()
-
     meds = st.text_input("Enter drugs")
 
-    if st.button("Analyze"):
+    if st.button("Analyze") and meds:
         if ai_mode == "🏥 Hospital AI":
             prompt = f"Check interactions using hospital formulary: {meds}"
         elif ai_mode == "🌍 Global AI":
@@ -333,7 +305,6 @@ if module == "💊 Drug Interaction AI":
 if module == "🩻 Radiology AI":
     st.header("🩻 Radiology AI")
     ai_mode = select_ai_mode()
-
     file = st.file_uploader("Upload scan")
 
     if file and st.button("Generate Report"):
@@ -348,7 +319,15 @@ if module == "🩻 Radiology AI":
         st.write(resp["answer"])
 
 # ======================================================
-# Remaining integrations unchanged (HL7, HIS, PACS, Sign-off, NABH, Audit)
+# 🕒 AUDIT TRAIL
 # ======================================================
+if module == "🕒 Audit Trail":
+    st.header("🕒 Audit Trail")
+    if os.path.exists(AUDIT_LOG):
+        df = pd.DataFrame(json.load(open(AUDIT_LOG)))
+        st.dataframe(df, use_container_width=True)
 
+# ======================================================
+# FOOTER
+# ======================================================
 st.caption("ĀROGYABODHA AI © Hospital Clinical Intelligence Platform — Enterprise Production Build")
